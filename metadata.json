@@ -1,0 +1,6 @@
+{
+  "name": "Graph-AI Predictive Change Impact Analysis",
+  "description": "Graph-AI Based Predictive Change Impact Analysis for Risk-Aware Software Release Engineering",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
