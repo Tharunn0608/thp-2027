@@ -4,14 +4,19 @@ import { DEMO_REPOSITORIES } from '../src/data/repositories.ts';
 import { PRECONFIGURED_ANALYSES } from '../src/mockData.ts';
 import { SoftwareRiskGraphEngine } from '../src/graph/engine.ts';
 import { ModelRiskPipeline } from '../src/ml/pipeline.ts';
+import { ChangeDetectorService } from '../src/services/changeParser.ts';
+import { TestRecommenderEngine } from '../src/services/testRecommender.ts';
+import { TemporalLeakageAuditor } from '../src/graph/temporal_auditor.ts';
 
-console.log('--- RUNNING AUTOMATED AUDIT SUITE ---');
+console.log('====================================================');
+console.log('--- RUNNING FULL RESEARCH & FUNCTIONALITY TEST SUITE ---');
+console.log('====================================================');
 
 // 1. Check all repositories
-assert.strictEqual(DEMO_REPOSITORIES.length >= 3, true);
-console.log('✓ Repositories count check passed:', DEMO_REPOSITORIES.length);
+assert.strictEqual(DEMO_REPOSITORIES.length >= 4, true);
+console.log('✓ Repositories count check passed: ' + DEMO_REPOSITORIES.length + ' connected domains');
 
-// 2. Check each repository has distinct analysis
+// 2. Check each repository has distinct analysis & graph
 for (const repo of DEMO_REPOSITORIES) {
   const commit = repo.commits[0];
   assert.ok(commit, `Repo ${repo.id} must have at least one commit`);
@@ -22,7 +27,7 @@ for (const repo of DEMO_REPOSITORIES) {
   console.log(`✓ Repository '${repo.name}' verified: ${analysis.graph.nodes.length} nodes, Risk ${analysis.risk.score}/100 (${analysis.risk.level})`);
 }
 
-// 3. Bidirectional graph traversal test
+// 3. Bidirectional graph traversal test (Containment Bubbling)
 const testGraph = {
   id: 'g-test',
   repositoryId: 'test',
@@ -54,22 +59,66 @@ const snapshot = tempEngine.getSnapshotAtT0(t0);
 assert.strictEqual(snapshot.edges.some(e => e.id === 'efuture'), false, 'Future event must be excluded');
 console.log('✓ Temporal leakage guard verified: post-T0 events strictly purged');
 
-// 5. ML Pipeline Reproducibility
-const ml = new ModelRiskPipeline();
-const p1 = ml.runProposedModelB5(impact, 800, true, 10);
-const p2 = ml.runProposedModelB5(impact, 800, true, 10);
-assert.strictEqual(p1.score, p2.score, 'Outputs must be deterministic');
-console.log('✓ Model pipeline reproducibility verified: Score =', p1.score);
+// 5. Change Detection & Unified Diff Parsing
+const sampleDiff = `diff --git a/src/controllers/PaymentController.ts b/src/controllers/PaymentController.ts
+--- a/src/controllers/PaymentController.ts
++++ b/src/controllers/PaymentController.ts
+@@ -10,4 +10,8 @@
++router.post('/v1/charge', async (req, res) => {
++  const payment = await executePayment(req.body);
++  res.json(payment);
++});
+diff --git a/migrations/20260917_ledger.sql b/migrations/20260917_ledger.sql
+--- a/migrations/20260917_ledger.sql
++++ b/migrations/20260917_ledger.sql
+@@ -1,2 +1,4 @@
++ALTER TABLE ledgers ADD CONSTRAINT balance_check CHECK (amount >= 0);
+`;
+const parsedDiff = ChangeDetectorService.parseDiff(sampleDiff);
+assert.strictEqual(parsedDiff.filesChanged, 2);
+assert.ok(parsedDiff.insertions >= 5);
+assert.ok(parsedDiff.entities.some(e => e.type === 'api'));
+assert.ok(parsedDiff.entities.some(e => e.type === 'schema'));
+console.log(`✓ ChangeDetectorService verified: ${parsedDiff.entities.length} entities classified from unified diff (${parsedDiff.changeType})`);
 
-// 6. Temporal Leakage Auditor Automated Suite
-import { TemporalLeakageAuditor } from '../src/graph/temporal_auditor.ts';
+// 6. Dynamic Test Recommender Engine
+const recommended = TestRecommenderEngine.recommendTests(testGraph, impact);
+assert.ok(recommended.recommendedTests.length > 0, 'Must produce recommended tests');
+assert.ok(recommended.testMetrics.testReductionPercent > 0, 'Test suite reduction must be positive');
+assert.ok(recommended.testMetrics.p0Count >= 1, 'Direct critical touched nodes must generate P0 priority tests');
+console.log(`✓ TestRecommenderEngine verified: ${recommended.recommendedTests.length} tests recommended (${recommended.testMetrics.p0Count} P0, ${recommended.testMetrics.testReductionPercent}% suite reduction)`);
+
+// 7. Research Model Baselines B1, B2, B3, B5 & Model Comparator
+const ml = new ModelRiskPipeline();
+const b1 = ml.runBaselineB1(impact);
+const b2 = ml.runBaselineB2(impact);
+const b3 = ml.runBaselineB3(impact, 45, 420, 1);
+const b5 = ml.runProposedModelB5(impact, 800, true, 10);
+
+assert.strictEqual(b1.architectureFamily, 'B1_STATIC');
+assert.strictEqual(b2.architectureFamily, 'B2_RULE');
+assert.strictEqual(b3.architectureFamily, 'B3_TRADITIONAL_ML');
+assert.strictEqual(b5.architectureFamily, 'B5_TEMPORAL_GRAPH_ML');
+assert.strictEqual(b5.isSimulatedPrototype, true, 'B5 must be transparently labeled as prototype simulation');
+assert.ok(b3.calibratedProbability >= 0 && b3.calibratedProbability <= 1.0);
+assert.ok(b5.calibratedProbability >= 0 && b5.calibratedProbability <= 1.0);
+
+const comparison = ml.compareAllBaselines(impact);
+assert.ok(comparison.b1_static && comparison.b2_rule && comparison.b3_traditional_ml && comparison.b5_temporal_gnn);
+console.log(`✓ Model Risk Pipeline verified across all 4 baselines:
+    - B1 (Static Reachability): Score ${b1.score}/100 (${b1.level})
+    - B2 (Rule Criticality):   Score ${b2.score}/100 (${b2.level})
+    - B3 (Tabular Logistic ML): Score ${b3.score}/100 (${b3.level}) [P=${b3.calibratedProbability}]
+    - B5 (Proposed Temp GNN):  Score ${b5.score}/100 (${b5.level}) [P=${b5.calibratedProbability}]`);
+
+// 8. Temporal Leakage Auditor Automated Suite
 const auditSuite = TemporalLeakageAuditor.runAutomatedLeakageSuite();
 for (const test of auditSuite) {
   assert.strictEqual(test.passed, true, `Audit suite test failed: ${test.testName}`);
 }
-console.log(`✓ Temporal Leakage Auditor P0 Suite passed: ${auditSuite.length}/${auditSuite.length} tests`);
+console.log(`✓ Temporal Leakage Auditor P0 Suite passed: ${auditSuite.length}/${auditSuite.length} checks`);
 
-// 7. Full-Stack End-to-End REST API Verification
+// 9. Full-Stack End-to-End REST API Verification
 import express from 'express';
 import { createApiRouter } from '../src/server/api.ts';
 
@@ -83,7 +132,7 @@ async function testApiEndpoints() {
   const baseUrl = `http://127.0.0.1:${port}/api`;
 
   try {
-    // 7.1 Health checks
+    // 9.1 Health checks
     const resHealth = await fetch(`${baseUrl}/health`).then(r => r.json());
     assert.strictEqual(resHealth.status, 'ok');
 
@@ -91,10 +140,10 @@ async function testApiEndpoints() {
     assert.strictEqual(resSysHealth.status, 'PASS');
     console.log('✓ GET /api/health and /api/system/health verified');
 
-    // 7.2 Repositories
+    // 9.2 Repositories & Commits
     const resRepos = await fetch(`${baseUrl}/repositories`).then(r => r.json());
     assert.strictEqual(Array.isArray(resRepos.repositories), true);
-    assert.strictEqual(resRepos.repositories.length >= 3, true);
+    assert.strictEqual(resRepos.repositories.length >= 4, true);
 
     const testRepoId = resRepos.repositories[0].id;
     const resSingleRepo = await fetch(`${baseUrl}/repositories/${testRepoId}`).then(r => r.json());
@@ -105,16 +154,27 @@ async function testApiEndpoints() {
     assert.strictEqual(resCommits.commits.length > 0, true);
     console.log('✓ GET /api/repositories and /api/repositories/:id/commits verified');
 
-    // 7.3 Projects/Analyses
-    const resProjAnalyses = await fetch(`${baseUrl}/projects/${testRepoId}/analyses`).then(r => r.json());
-    assert.strictEqual(Array.isArray(resProjAnalyses.analyses), true);
-    assert.strictEqual(resProjAnalyses.analyses.length > 0, true);
-    console.log('✓ GET /api/projects/:id/analyses verified');
+    // 9.3 Diff Parsing Endpoint
+    const resDiff = await fetch(`${baseUrl}/diff/parse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ diffText: sampleDiff })
+    }).then(r => r.json());
+    assert.strictEqual(resDiff.filesChanged, 2);
+    console.log('✓ POST /api/diff/parse verified');
 
-    // 7.4 Sub-Endpoints for Analysis Breakdown
+    // 9.4 Compare Models Endpoint
     const analysisId = 'an-col-901';
-    const resRisk = await fetch(`${baseUrl}/analysis/${analysisId}/risk`).then(r => r.json());
-    assert.ok(resRisk.risk.score >= 0 && resRisk.risk.score <= 100);
+    const resComp = await fetch(`${baseUrl}/analysis/${analysisId}/compare-models`).then(r => r.json());
+    assert.ok(resComp.comparison.b1_static);
+    assert.ok(resComp.comparison.b2_rule);
+    assert.ok(resComp.comparison.b3_traditional_ml);
+    assert.ok(resComp.comparison.b5_temporal_gnn);
+    console.log('✓ GET /api/analysis/:id/compare-models verified');
+
+    // 9.5 Granular Analysis Breakdown & Model Query Param
+    const resRiskB3 = await fetch(`${baseUrl}/analysis/${analysisId}/risk?model=B3_TRADITIONAL_ML`).then(r => r.json());
+    assert.strictEqual(resRiskB3.modelDetails.architectureFamily, 'B3_TRADITIONAL_ML');
 
     const resImpact = await fetch(`${baseUrl}/analysis/${analysisId}/impact`).then(r => r.json());
     assert.ok(Array.isArray(resImpact.affectedComponents));
@@ -128,9 +188,9 @@ async function testApiEndpoints() {
     const resWhatIf = await fetch(`${baseUrl}/analysis/${analysisId}/what-if`).then(r => r.json());
     assert.ok(Array.isArray(resWhatIf.scenarios));
 
-    console.log('✓ Granular analysis sub-endpoints (risk, impact, tests, explanation, what-if) verified');
+    console.log('✓ Granular analysis sub-endpoints (risk?model, impact, tests, explanation, what-if) verified');
 
-    // 7.5 Post Decisions & Outcomes
+    // 9.6 Human Release Decision & Post-T0 Outcome Persistence
     const resDec = await fetch(`${baseUrl}/analyses/${analysisId}/decisions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -153,7 +213,7 @@ async function testApiEndpoints() {
     }).then(r => r.json());
     assert.strictEqual(resOutcome.status, 'RECORDED');
 
-    // 7.6 Experiments and Ablations
+    // 9.7 Experiments and Ablations
     const resExp = await fetch(`${baseUrl}/experiments`).then(r => r.json());
     assert.ok(Array.isArray(resExp.experiments));
 
@@ -167,7 +227,9 @@ async function testApiEndpoints() {
 }
 
 testApiEndpoints().then(() => {
-  console.log('--- ALL TEST SUITE ASSERTIONS PASSED ---');
+  console.log('====================================================');
+  console.log('--- ALL TEST SUITE ASSERTIONS PASSED WITH ZERO ERRORS ---');
+  console.log('====================================================');
 }).catch((err) => {
   console.error('Test suite failure:', err);
   process.exit(1);

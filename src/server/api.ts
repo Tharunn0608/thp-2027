@@ -4,6 +4,8 @@ import { DEMO_REPOSITORIES } from '../data/repositories.ts';
 import { SoftwareRiskGraphEngine } from '../graph/engine.ts';
 import { ModelRiskPipeline } from '../ml/pipeline.ts';
 import { ExplanationService } from '../services/explanation.ts';
+import { ChangeDetectorService } from '../services/changeParser.ts';
+import { TestRecommenderEngine } from '../services/testRecommender.ts';
 import { AnalysisResult } from '../types.ts';
 import { db } from '../db/store.ts';
 
@@ -127,10 +129,27 @@ export function createApiRouter() {
     res.json({ analyses: allAnalyses });
   });
 
+  // Endpoint to parse raw git diffs and classify changed entities
+  router.post('/diff/parse', (req, res) => {
+    const { diffText } = req.body;
+    if (!diffText || typeof diffText !== 'string') {
+      return res.status(400).json({ error: { code: 'INVALID_DIFF', message: 'diffText string is required' } });
+    }
+    const parsed = ChangeDetectorService.parseDiff(diffText);
+    res.json(parsed);
+  });
+
   // Dynamic analysis submission endpoint (Repository-Agnostic)
   router.post('/projects/:projectId/analyses', async (req, res) => {
     const { projectId } = req.params;
-    const { commitSha, modelFamily = 'B5_TEMPORAL_GRAPH_ML', cutoffT0 = '2026-09-17T09:00:00Z' } = req.body;
+    const { 
+      commitSha, 
+      diffText,
+      modelFamily = 'B5_TEMPORAL_GRAPH_ML', 
+      cutoffT0 = '2026-09-17T09:00:00Z',
+      activeRps,
+      hasHistoricalIncident
+    } = req.body;
 
     const repo = DEMO_REPOSITORIES.find(r => r.id === projectId);
     const targetCommit = repo?.commits.find(c => c.sha === commitSha) || repo?.commits[0];
@@ -143,14 +162,22 @@ export function createApiRouter() {
     const changedNode = baseAnalysis.graph.nodes.find(n => n.isChanged) || baseAnalysis.graph.nodes[0];
     const traversal = activeEngine.calculateDownstreamImpact(changedNode.id);
 
+    // Dynamic entity classification if diff is passed
+    let parsedDiff = diffText ? ChangeDetectorService.parseDiff(diffText) : undefined;
+
     let prediction;
     if (modelFamily === 'B1_STATIC') {
       prediction = modelPipeline.runBaselineB1(traversal);
     } else if (modelFamily === 'B2_RULE') {
       prediction = modelPipeline.runBaselineB2(traversal);
+    } else if (modelFamily === 'B3_TRADITIONAL_ML') {
+      prediction = modelPipeline.runBaselineB3(traversal, parsedDiff ? parsedDiff.insertions + parsedDiff.deletions : 54, activeRps || 640);
     } else {
-      prediction = modelPipeline.runProposedModelB5(traversal);
+      prediction = modelPipeline.runProposedModelB5(traversal, activeRps || 920, hasHistoricalIncident !== undefined ? hasHistoricalIncident : true);
     }
+
+    // Dynamic test recommendation based on graph traversal
+    const dynamicTests = TestRecommenderEngine.recommendTests(baseAnalysis.graph, traversal, baseAnalysis.recommendedTests);
 
     const updatedResult: AnalysisResult = {
       ...baseAnalysis,
@@ -162,9 +189,24 @@ export function createApiRouter() {
         score: prediction.score,
         level: prediction.level,
         modelId: prediction.modelId,
-        modelVersion: prediction.modelVersion
-      }
+        modelVersion: prediction.modelVersion,
+        calibratedProbability: prediction.calibratedProbability,
+        confidence: prediction.confidence
+      },
+      recommendedTests: dynamicTests.recommendedTests,
+      testMetrics: dynamicTests.testMetrics
     };
+
+    if (parsedDiff && parsedDiff.entities.length > 0) {
+      updatedResult.changeSummary = {
+        ...updatedResult.changeSummary,
+        changeType: parsedDiff.changeType,
+        filesChanged: parsedDiff.filesChanged,
+        insertions: parsedDiff.insertions,
+        deletions: parsedDiff.deletions,
+        entities: parsedDiff.entities
+      };
+    }
 
     db.saveAnalysis(updatedResult);
     res.status(201).json(updatedResult);
@@ -172,7 +214,15 @@ export function createApiRouter() {
 
   // Alias endpoint: POST /analysis
   router.post('/analysis', async (req, res) => {
-    const { projectId = 'repo-college-mgmt', commitSha, modelFamily = 'B5_TEMPORAL_GRAPH_ML', cutoffT0 = '2026-09-17T09:00:00Z' } = req.body;
+    const { 
+      projectId = 'repo-college-mgmt', 
+      commitSha, 
+      diffText,
+      modelFamily = 'B5_TEMPORAL_GRAPH_ML', 
+      cutoffT0 = '2026-09-17T09:00:00Z',
+      activeRps,
+      hasHistoricalIncident
+    } = req.body;
     const repo = DEMO_REPOSITORIES.find(r => r.id === projectId);
     const targetCommit = repo?.commits.find(c => c.sha === commitSha) || repo?.commits[0];
     const analysisKey = targetCommit?.analysisKey || (projectId === 'repo-college-mgmt' ? 'college-commit-enrollment' : projectId === 'repo-banking-core' ? 'banking-commit-aml' : 'commit-452-high-risk');
@@ -183,14 +233,20 @@ export function createApiRouter() {
     const changedNode = baseAnalysis.graph.nodes.find(n => n.isChanged) || baseAnalysis.graph.nodes[0];
     const traversal = activeEngine.calculateDownstreamImpact(changedNode.id);
 
+    let parsedDiff = diffText ? ChangeDetectorService.parseDiff(diffText) : undefined;
+
     let prediction;
     if (modelFamily === 'B1_STATIC') {
       prediction = modelPipeline.runBaselineB1(traversal);
     } else if (modelFamily === 'B2_RULE') {
       prediction = modelPipeline.runBaselineB2(traversal);
+    } else if (modelFamily === 'B3_TRADITIONAL_ML') {
+      prediction = modelPipeline.runBaselineB3(traversal, parsedDiff ? parsedDiff.insertions + parsedDiff.deletions : 54, activeRps || 640);
     } else {
-      prediction = modelPipeline.runProposedModelB5(traversal);
+      prediction = modelPipeline.runProposedModelB5(traversal, activeRps || 920, hasHistoricalIncident !== undefined ? hasHistoricalIncident : true);
     }
+
+    const dynamicTests = TestRecommenderEngine.recommendTests(baseAnalysis.graph, traversal, baseAnalysis.recommendedTests);
 
     const updatedResult: AnalysisResult = {
       ...baseAnalysis,
@@ -202,18 +258,77 @@ export function createApiRouter() {
         score: prediction.score,
         level: prediction.level,
         modelId: prediction.modelId,
-        modelVersion: prediction.modelVersion
-      }
+        modelVersion: prediction.modelVersion,
+        calibratedProbability: prediction.calibratedProbability,
+        confidence: prediction.confidence
+      },
+      recommendedTests: dynamicTests.recommendedTests,
+      testMetrics: dynamicTests.testMetrics
     };
+
+    if (parsedDiff && parsedDiff.entities.length > 0) {
+      updatedResult.changeSummary = {
+        ...updatedResult.changeSummary,
+        changeType: parsedDiff.changeType,
+        filesChanged: parsedDiff.filesChanged,
+        insertions: parsedDiff.insertions,
+        deletions: parsedDiff.deletions,
+        entities: parsedDiff.entities
+      };
+    }
 
     db.saveAnalysis(updatedResult);
     res.status(201).json(updatedResult);
   });
 
-  // Granular Sub-Endpoints for Analysis Breakdown (supports both /analysis/:id/... and /analyses/:id/...)
+  // Granular Sub-Endpoints for Analysis Breakdown
+  router.get(['/analyses/:analysisId/compare-models', '/analysis/:analysisId/compare-models'], (req, res) => {
+    const found = findAnalysis(req.params.analysisId);
+    if (!found) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Analysis not found' } });
+    
+    const activeEngine = new SoftwareRiskGraphEngine(found.graph);
+    const changedNode = found.graph.nodes.find(n => n.isChanged) || found.graph.nodes[0];
+    const traversal = activeEngine.calculateDownstreamImpact(changedNode.id);
+    
+    const comparison = modelPipeline.compareAllBaselines(traversal);
+    res.json({
+      analysisId: found.analysisId,
+      commitSha: found.commitSha,
+      comparison,
+      scientificIntegrityNotice: 'B1 (Static), B2 (Rule), and B3 (Tabular ML) are fully executed baselines. B5 is an executable architectural prototype of the Proposed Temporal GNN.'
+    });
+  });
+
   router.get(['/analyses/:analysisId/risk', '/analysis/:analysisId/risk'], (req, res) => {
     const found = findAnalysis(req.params.analysisId);
     if (!found) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Analysis not found' } });
+    
+    const modelParam = req.query.model as string;
+    if (modelParam) {
+      const activeEngine = new SoftwareRiskGraphEngine(found.graph);
+      const changedNode = found.graph.nodes.find(n => n.isChanged) || found.graph.nodes[0];
+      const traversal = activeEngine.calculateDownstreamImpact(changedNode.id);
+      let pred;
+      if (modelParam === 'B1_STATIC') pred = modelPipeline.runBaselineB1(traversal);
+      else if (modelParam === 'B2_RULE') pred = modelPipeline.runBaselineB2(traversal);
+      else if (modelParam === 'B3_TRADITIONAL_ML') pred = modelPipeline.runBaselineB3(traversal);
+      else pred = modelPipeline.runProposedModelB5(traversal);
+
+      return res.json({
+        risk: {
+          ...found.risk,
+          score: pred.score,
+          level: pred.level,
+          modelId: pred.modelId,
+          modelVersion: pred.modelVersion,
+          confidence: pred.confidence,
+          calibratedProbability: pred.calibratedProbability
+        },
+        blastRadius: found.blastRadius,
+        modelDetails: pred
+      });
+    }
+
     res.json({ risk: found.risk, blastRadius: found.blastRadius });
   });
 

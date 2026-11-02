@@ -16,7 +16,8 @@ import {
   Cpu,
   ArrowUpRight,
   ShieldCheck,
-  X
+  X,
+  FileCheck
 } from 'lucide-react';
 import { AnalysisResult, GraphNode, EvidenceItem } from '../../types.ts';
 
@@ -111,9 +112,9 @@ export const RiskEvidencePanel: React.FC<RiskEvidencePanelProps> = ({
             </div>
           </div>
         </div>
-        <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-indigo-950/80 text-indigo-300 border border-indigo-700/60 shrink-0">
-          T₀ Evaluated
-        </span>
+        <div className="px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-indigo-950/80 text-indigo-300 border border-indigo-700/60 shrink-0">
+          PROTOTYPE GNN
+        </div>
       </div>
 
       {/* 2. Interactive Node Inspector (Shown when clicked on graph) */}

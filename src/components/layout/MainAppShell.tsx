@@ -534,6 +534,7 @@ export const MainAppShell: React.FC = () => {
                     graph={currentAnalysis.graph} 
                     selectedNode={selectedNode}
                     onSelectNode={setSelectedNode}
+                    affectedComponents={currentAnalysis.affectedComponents}
                   />
                 </div>
 
@@ -607,6 +608,7 @@ export const MainAppShell: React.FC = () => {
                 graph={currentAnalysis.graph} 
                 selectedNode={selectedNode}
                 onSelectNode={setSelectedNode}
+                affectedComponents={currentAnalysis.affectedComponents}
               />
             </div>
           )}
@@ -619,6 +621,7 @@ export const MainAppShell: React.FC = () => {
                   graph={currentAnalysis.graph} 
                   selectedNode={selectedNode}
                   onSelectNode={setSelectedNode}
+                  affectedComponents={currentAnalysis.affectedComponents}
                 />
               </div>
               <div className="w-full lg:col-span-5 border-t lg:border-t-0 lg:border-l border-slate-800/80 bg-slate-950 overflow-visible lg:overflow-hidden lg:h-full min-w-0">

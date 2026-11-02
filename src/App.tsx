@@ -5,7 +5,12 @@
 
 import React from 'react';
 import { MainAppShell } from './components/layout/MainAppShell.tsx';
+import { ErrorBoundary } from './components/common/ErrorBoundary.tsx';
 
 export default function App() {
-  return <MainAppShell />;
+  return (
+    <ErrorBoundary>
+      <MainAppShell />
+    </ErrorBoundary>
+  );
 }
